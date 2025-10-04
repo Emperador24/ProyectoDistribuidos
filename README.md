@@ -268,10 +268,9 @@ Alejandro Barragan
 
 ## 📅 Fechas
 
-- **Primera Entrega**: 5 de octubre, 2025
-- **Sustentación**: Semana 11
+- **Primera Entrega**: 7 de octubre, 2025
 
 ---
 
-**Universidad Ada Lovelace**  
+**Pontifica Universidad Javeriana**  
 *Introducción a Sistemas Distribuidos 2025-30*
