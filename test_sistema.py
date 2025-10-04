@@ -101,18 +101,53 @@ class TestSistema:
         
         if not conexion:
             print("  ✗ No se pudo conectar a la BD")
-            return
+            return False
         
-        cursor = conexion.cursor()
-        
-        # Test 3: Verificar tablas
-        print("\n3. Verificar estructura de tablas...")
-        cursor.execute("SHOW TABLES")
-        tablas = cursor.fetchall()
-        print(f"  ✓ Tablas encontradas: {', '.join([t[0] for t in tablas])}")
-        
-        cursor.close()
-        conexion.close()
+        try:
+            cursor = conexion.cursor()
+            
+            # Test 1: Buscar un libro
+            print("\n1. Buscar libro por código...")
+            cursor.execute("SELECT codigo, nombre, ejemplares_disponibles FROM libros WHERE codigo = 'LIB00001'")
+            libro = cursor.fetchone()
+            
+            if libro:
+                print(f"  ✓ Libro encontrado:")
+                print(f"    Código: {libro[0]}")
+                print(f"    Nombre: {libro[1]}")
+                print(f"    Disponibles: {libro[2]}")
+            else:
+                print("  ✗ Libro no encontrado")
+            
+            # Test 2: Consultar préstamos activos
+            print("\n2. Consultar préstamos activos...")
+            cursor.execute("""
+                SELECT p.codigo_libro, l.nombre, p.usuario_id, p.fecha_entrega
+                FROM prestamos p
+                JOIN libros l ON p.codigo_libro = l.codigo
+                WHERE p.estado = 'ACTIVO'
+                LIMIT 5
+            """)
+            
+            prestamos = cursor.fetchall()
+            print(f"  ✓ {len(prestamos)} préstamos encontrados (mostrando primeros 5):")
+            for i, p in enumerate(prestamos, 1):
+                print(f"    {i}. Libro: {p[1][:40]} | Usuario: {p[2]} | Entrega: {p[3]}")
+            
+            # Test 3: Verificar tablas
+            print("\n3. Verificar estructura de tablas...")
+            cursor.execute("SHOW TABLES")
+            tablas = cursor.fetchall()
+            print(f"  ✓ Tablas encontradas: {', '.join([t[0] for t in tablas])}")
+            
+            cursor.close()
+            return True
+            
+        except mysql.connector.Error as e:
+            print(f"  ✗ Error en la base de datos: {e}")
+            return False
+        finally:
+            conexion.close()
     
     def mostrar_estado_sistema(self):
         """Muestra un resumen del estado actual del sistema"""
@@ -213,6 +248,8 @@ class TestSistema:
             
         except Exception as e:
             print(f"\n❌ ERROR durante los tests: {e}")
+            import traceback
+            traceback.print_exc()
             return False
 
 
@@ -240,32 +277,3 @@ def main():
 
 if __name__ == "__main__":
     main()
- 1: Buscar un libro
-        print("\n1. Buscar libro por código...")
-        cursor.execute("SELECT codigo, nombre, ejemplares_disponibles FROM libros WHERE codigo = 'LIB00001'")
-        libro = cursor.fetchone()
-        
-        if libro:
-            print(f"  ✓ Libro encontrado:")
-            print(f"    Código: {libro[0]}")
-            print(f"    Nombre: {libro[1]}")
-            print(f"    Disponibles: {libro[2]}")
-        else:
-            print("  ✗ Libro no encontrado")
-        
-        # Test 2: Consultar préstamos activos
-        print("\n2. Consultar préstamos activos...")
-        cursor.execute("""
-            SELECT p.codigo_libro, l.nombre, p.usuario_id, p.fecha_entrega
-            FROM prestamos p
-            JOIN libros l ON p.codigo_libro = l.codigo
-            WHERE p.estado = 'ACTIVO'
-            LIMIT 5
-        """)
-        
-        prestamos = cursor.fetchall()
-        print(f"  ✓ {len(prestamos)} préstamos encontrados (mostrando primeros 5):")
-        for i, p in enumerate(prestamos, 1):
-            print(f"    {i}. Libro: {p[1][:40]} | Usuario: {p[2]} | Entrega: {p[3]}")
-        
-        # Test
