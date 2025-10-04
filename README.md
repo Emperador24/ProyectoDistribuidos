@@ -263,7 +263,8 @@ proyecto/
 
 ## 👥 Equipo de Desarrollo
 
-[Incluir nombres del equipo]
+Samuel Emperador
+Alejandro Barragan
 
 ## 📅 Fechas
 
