@@ -111,4 +111,26 @@ CREATE TABLE IF NOT EXISTS prestamos (
     INDEX idx_estado (estado)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
--- Tabla de hist
+-- Tabla de historial de operaciones
+CREATE TABLE IF NOT EXISTS historial_operaciones (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    codigo_libro VARCHAR(20) NOT NULL,
+    usuario_id VARCHAR(50) NOT NULL,
+    operacion ENUM('PRESTAMO', 'DEVOLUCION', 'RENOVACION') NOT NULL,
+    fecha DATETIME NOT NULL,
+    sede INT NOT NULL,
+    datos_adicionales TEXT,
+    INDEX idx_fecha (fecha),
+    INDEX idx_operacion (operacion)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;orial de operaciones
+CREATE TABLE IF NOT EXISTS historial_operaciones (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    codigo_libro VARCHAR(20) NOT NULL,
+    usuario_id VARCHAR(50) NOT NULL,
+    operacion ENUM('PRESTAMO', 'DEVOLUCION', 'RENOVACION') NOT NULL,
+    fecha DATETIME NOT NULL,
+    sede INT NOT NULL,
+    datos_adicionales TEXT,
+    INDEX idx_fecha (fecha),
+    INDEX idx_operacion (operacion)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
