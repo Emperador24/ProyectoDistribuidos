@@ -1,0 +1,167 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  Stack para desplegar la infraestructura de la Biblioteca Digital.
+  Crea una VPC y dos instancias EC2. El acceso es a través de EC2 Instance Connect.
+  Instala Python 3.8, Docker, Git y otras dependencias.
+
+Parameters:
+  LatestAmiId:
+    Type: 'AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>'
+    Default: '/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64'
+    Description: El ID del AMI más reciente de Amazon Linux 2023.
+
+  GrpcPort:
+    Type: Number
+    Default: 50051
+    Description: Puerto para la comunicación gRPC entre las instancias.
+
+Resources:
+  #--- Red Virtual (VPC) y Componentes de Red ---#
+  VPC:
+    Type: 'AWS::EC2::VPC'
+    Properties:
+      CidrBlock: 10.0.0.0/16
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-VPC'
+
+  PublicSubnet:
+    Type: 'AWS::EC2::Subnet'
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 10.0.1.0/24
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-PublicSubnet'
+
+  InternetGateway:
+    Type: 'AWS::EC2::InternetGateway'
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-IGW'
+
+  VPCGatewayAttachment:
+    Type: 'AWS::EC2::VPCGatewayAttachment'
+    Properties:
+      VpcId: !Ref VPC
+      InternetGatewayId: !Ref InternetGateway
+
+  PublicRouteTable:
+    Type: 'AWS::EC2::RouteTable'
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-PublicRouteTable'
+
+  DefaultPublicRoute:
+    Type: 'AWS::EC2::Route'
+    DependsOn: VPCGatewayAttachment
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  PublicSubnetRouteTableAssociation:
+    Type: 'AWS::EC2::SubnetRouteTableAssociation'
+    Properties:
+      SubnetId: !Ref PublicSubnet
+      RouteTableId: !Ref PublicRouteTable
+
+  #--- Grupo de Seguridad ---#
+  ClientSecurityGroup:
+    Type: 'AWS::EC2::SecurityGroup'
+    Properties:
+      GroupName: "Biblioteca-SG"
+      GroupDescription: "Permite comunicacion SSH, ICMP y gRPC"
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        # Acceso externo para EC2 Instance Connect
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 0.0.0.0/0
+          Description: "Acceso SSH desde cualquier lugar"
+        # Comunicación interna en la VPC
+        - IpProtocol: icmp
+          FromPort: -1
+          ToPort: -1
+          CidrIp: 10.0.0.0/16
+          Description: "ICMP (ping) dentro de la VPC"
+        - IpProtocol: tcp
+          FromPort: !Ref 5555
+          ToPort: !Ref 5556
+          CidrIp: 10.0.0.0/16
+      Tags:
+        - Key: Name
+          Value: "Biblioteca-SG"
+
+  #--- Instancias EC2 ---#
+  SolicitantesPSInstance:
+    Type: 'AWS::EC2::Instance'
+    Properties:
+      InstanceType: t2.micro
+      ImageId: !Ref LatestAmiId
+      SecurityGroupIds:
+        - !Ref ClientSecurityGroup
+      SubnetId: !Ref PublicSubnet
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash -xe
+          # Update packages
+          dnf update -y
+          
+          # Install Python 3.12, Pip for 3.12, and Git
+          dnf install -y python3.12 python3.12-pip git
+          
+          # Install required Python libraries
+          pip3.12 install mysql-connector-python pyzmq
+      Tags:
+        - Key: Name
+          Value: "Solicitantes PS"
+
+  GCActoresBDInstance:
+    Type: 'AWS::EC2::Instance'
+    Properties:
+      InstanceType: t2.micro
+      ImageId: !Ref LatestAmiId
+      SecurityGroupIds:
+        - !Ref ClientSecurityGroup
+      SubnetId: !Ref PublicSubnet
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash -xe
+          # Update packages
+          dnf update -y
+          
+          # Install Python 3.12, Pip for 3.12, and Git
+          dnf install -y python3.12 python3.12-pip git
+          
+          # Install required Python libraries
+          pip3.12 install mysql-connector-python pyzmq
+          
+          # Install and configure Docker
+          dnf install -y docker
+          systemctl start docker
+          systemctl enable docker
+          usermod -a -G docker ec2-user
+      Tags:
+        - Key: Name
+          Value: "GC, Actores y BD"
+
+Outputs:
+  VPCId:
+    Description: ID de la VPC creada
+    Value: !Ref VPC
+
+  SolicitantesPSPublicIP:
+    Description: Dirección IP publica de la instancia Solicitantes PS
+    Value: !GetAtt SolicitantesPSInstance.PublicIp
+
+  GCActoresBDPublicIP:
+    Description: Dirección IP publica de la instancia GC, Actores y BD
+    Value: !GetAtt GCActoresBDInstance.PublicIp

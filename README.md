@@ -8,6 +8,10 @@ Sistema distribuido para el préstamo de libros en la Universidad Ada Lovelace. 
 - MySQL 8.0
 - Docker y Docker Compose (opcional, para contenedor MySQL)
 
+Puedes usar el template de AWS CloudFormation para crear la infraestructura necesaria para ejecutar este proyecto en la nube ☁️.
+Los templates disponibles en el momento son:
+- Primera entrega: template-proyecto.yaml
+
 ## 🚀 Instalación
 
 ### 1. Instalar dependencias de Python
@@ -35,15 +39,22 @@ Si tienes MySQL instalado localmente, ejecuta el script SQL:
 ```bash
 mysql -u root -p < setup_database.sql
 ```
+o al contenedor del docker-compose
+
+```bash
+docker exec -it biblioteca_mysql mysql -u root -prootpass < setup_database.sql
+
+```
+
 
 ### 3. Generar datos iniciales
 
 ```bash
 # Si usas Docker
-python generar_datos_iniciales.py localhost 3306
+python3.12 generar_datos_inic.py localhost 3306
 
 # Si MySQL está en otro host
-python generar_datos_iniciales.py <host> <puerto>
+python3.12 generar_datos_inic.py <host> <puerto>
 ```
 
 Esto creará:
@@ -81,20 +92,32 @@ Esto creará:
 
 ```bash
 # Terminal 1: Gestor de Carga
-python gestor_carga.py 1 5555 5556
+python3.12 gestor_carga.py 1 5555 5556
 
 # Terminal 2: Actor Devolución
-python actor.py DEVOLUCION 1 localhost 5556 <mysql_host> 3306
+python3.12 actor.py DEVOLUCION 1 localhost 5556 <mysql_host> 3306
 
 # Terminal 3: Actor Renovación
-python actor.py RENOVACION 1 localhost 5556 <mysql_host> 3306
+python3.12 actor.py RENOVACION 1 localhost 5556 <mysql_host> 3306
 ```
+
+también puedes correrlos como servicios usando nohup. De este modo los ejecutas en segundo plano, y almacenas su logs en los archivos .log
+
+```bash
+nohup python3.12 gestor_carga.py 1 5555 5556 > gestor.log 2>&1 &
+
+nohup python3.12 actor.py DEVOLUCION 1 localhost 5556 localhost 3306 > devolucion.log 2>&1 &
+
+nohup python3.12 actor.py RENOVACION 1 localhost 5556 localhost 3306 > renovacion.log 2>&1 &
+
+```
+
 
 #### **Computadora 2: Proceso Solicitante**
 
 ```bash
 # Ejecutar PS conectándose al GC de la Computadora 1
-python proceso_solicitante.py peticiones.txt <ip_computadora_1> 5555
+python3.12 proceso_solicitante.py peticiones.txt <ip_computadora_1> 5555
 ```
 
 ### Configuración completa para 3 computadoras
@@ -103,36 +126,36 @@ python proceso_solicitante.py peticiones.txt <ip_computadora_1> 5555
 
 ```bash
 # Terminal 1: Gestor de Carga Sede 1
-python gestor_carga.py 1 5555 5556
+python3.12 gestor_cargar.py 1 5555 5556
 
 # Terminal 2: Actor Devolución Sede 1
-python actor.py DEVOLUCION 1 localhost 5556 <mysql_host> 3306
+python3.12 actor.py DEVOLUCION 1 localhost 5556 <mysql_host> 3306
 
 # Terminal 3: Actor Renovación Sede 1
-python actor.py RENOVACION 1 localhost 5556 <mysql_host> 3306
+python3.12 actor.py RENOVACION 1 localhost 5556 <mysql_host> 3306
 ```
 
 #### **Computadora 2: GC + Actores Sede 2**
 
 ```bash
 # Terminal 1: Gestor de Carga Sede 2
-python gestor_carga.py 2 5557 5558
+python3.12 gestor_cargar.py 2 5557 5558
 
 # Terminal 2: Actor Devolución Sede 2
-python actor.py DEVOLUCION 2 localhost 5558 <mysql_host> 3306
+python3.12 actor.py DEVOLUCION 2 localhost 5558 <mysql_host> 3306
 
 # Terminal 3: Actor Renovación Sede 2
-python actor.py RENOVACION 2 localhost 5558 <mysql_host> 3306
+python3.12 actor.py RENOVACION 2 localhost 5558 <mysql_host> 3306
 ```
 
 #### **Computadora 3: Procesos Solicitantes**
 
 ```bash
 # PS para Sede 1
-python proceso_solicitante.py peticiones.txt <ip_comp1> 5555
+python3.12 proceso_solicitante.py peticiones.txt <ip_comp1> 5555
 
 # PS para Sede 2 (en otra terminal)
-python proceso_solicitante.py peticiones.txt <ip_comp2> 5557
+python3.12 proceso_solicitante.py peticiones.txt <ip_comp2> 5557
 ```
 
 ## 📝 Formato del Archivo de Peticiones
@@ -156,7 +179,7 @@ PRESTAMO|LIB00300|USR3001
 
 ```bash
 # Conectarse a MySQL
-docker exec -it biblioteca_mysql mysql -u biblioteca_user -pbiblioteca_pass
+docker exec -it biblioteca_mysql mysql -u root -prootpass
 
 # Ver libros disponibles en Sede 1
 USE biblioteca_sede1;
