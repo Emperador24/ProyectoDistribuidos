@@ -1,7 +1,7 @@
 """
 Actor Unificado
-Procesa DEVOLUCION, RENOVACION (asíncronas) y PRESTAMO (síncrona)
-Se comunica con el Gestor de Almacenamiento (GA) en lugar de la BD directamente
+Procesa DEVOLUCION, RENOVACION y PRESTAMO (todas síncronas con REP)
+Se comunica con el Gestor de Almacenamiento (GA) mediante REQ/REP
 """
 import zmq
 import json
@@ -10,19 +10,16 @@ import time
 import sys
 
 class Actor:
-    def __init__(self, tipo, sede, gc_host="localhost", gc_port=5556, 
-                 ga_host="localhost", ga_port=5560, puerto_rep=None):
+    def __init__(self, tipo, sede, puerto_rep, ga_host="localhost", ga_port=5560):
         """
         Inicializa el Actor
         
         Args:
             tipo: Tipo de actor ('DEVOLUCION', 'RENOVACION' o 'PRESTAMO')
             sede: Identificador de la sede
-            gc_host: Host del Gestor de Carga
-            gc_port: Puerto del publisher del GC (para SUB) o puerto propio (para REP)
+            puerto_rep: Puerto REP para recibir solicitudes del GC
             ga_host: Host del Gestor de Almacenamiento
             ga_port: Puerto del Gestor de Almacenamiento
-            puerto_rep: Puerto REP si es actor de préstamo (ej: 5559)
         """
         self.tipo = tipo.upper()
         self.sede = sede
@@ -32,21 +29,10 @@ class Actor:
         # Configurar ZeroMQ
         self.context = zmq.Context()
         
-        # Socket para operaciones del actor (SUB o REP)
-        if self.tipo == 'PRESTAMO':
-            # PRÉSTAMO: Socket REP (síncrono)
-            if puerto_rep is None:
-                puerto_rep = 5559 if sede == 1 else 5560
-            self.socket = self.context.socket(zmq.REP)
-            self.socket.bind(f"tcp://*:{puerto_rep}")
-            print(f"[Actor-{self.tipo}-Sede{sede}] Iniciado en puerto {puerto_rep} (REP - Síncrono)")
-        else:
-            # DEVOLUCIÓN/RENOVACIÓN: Socket SUB (asíncrono)
-            self.socket = self.context.socket(zmq.SUB)
-            self.socket.connect(f"tcp://{gc_host}:{gc_port}")
-            self.socket.setsockopt_string(zmq.SUBSCRIBE, self.tipo)
-            print(f"[Actor-{self.tipo}-Sede{sede}] Conectado a GC: {gc_host}:{gc_port} (SUB)")
-            print(f"[Actor-{self.tipo}-Sede{sede}] Suscrito al tópico: {self.tipo}")
+        # Socket REP para recibir solicitudes del GC (todos los actores usan REP ahora)
+        self.socket = self.context.socket(zmq.REP)
+        self.socket.bind(f"tcp://*:{puerto_rep}")
+        print(f"[Actor-{self.tipo}-Sede{sede}] Iniciado en puerto {puerto_rep} (REP - Síncrono)")
         
         # Socket REQ para comunicarse con el Gestor de Almacenamiento
         self.socket_ga = self.context.socket(zmq.REQ)
@@ -84,13 +70,16 @@ class Actor:
     
     def procesar_devolucion(self, mensaje):
         """
-        Procesa una devolución de libro solicitando al GA
+        Procesa una devolución de libro solicitando al GA (SÍNCRONO)
+        
+        Returns:
+            dict: Respuesta con estado de la devolución
         """
         codigo_libro = mensaje['codigo_libro']
         usuario_id = mensaje['usuario_id']
         timestamp = mensaje['timestamp']
         
-        print(f"\n[Actor-{self.tipo}-Sede{self.sede}] Procesando devolución:")
+        print(f"\n[Actor-{self.tipo}-Sede{self.sede}] Procesando devolución (SÍNCRONO):")
         print(f"  → Libro: {codigo_libro}")
         print(f"  → Usuario: {usuario_id}")
         
@@ -105,7 +94,12 @@ class Actor:
         if respuesta_update['estado'] != 'OK':
             print(f"[Actor-{self.tipo}-Sede{self.sede}] ✗ Error en UPDATE: {respuesta_update['mensaje']}")
             self.operaciones_fallidas += 1
-            return
+            return {
+                'estado': 'ERROR',
+                'mensaje': respuesta_update['mensaje'],
+                'codigo_libro': codigo_libro,
+                'timestamp': datetime.now().isoformat()
+            }
         
         print(f"[Actor-{self.tipo}-Sede{self.sede}] ✓ BD actualizada:")
         print(f"  → Libro: {respuesta_update.get('libro', 'Desconocido')}")
@@ -125,19 +119,37 @@ class Actor:
             print(f"[Actor-{self.tipo}-Sede{self.sede}] ✓ Operación registrada en historial")
             print(f"[Actor-{self.tipo}-Sede{self.sede}] → Replicación asíncrona a BD secundaria iniciada")
             self.operaciones_exitosas += 1
+            
+            return {
+                'estado': 'OK',
+                'mensaje': 'Devolución procesada exitosamente',
+                'codigo_libro': codigo_libro,
+                'libro': respuesta_update.get('libro', ''),
+                'ejemplares_disponibles': respuesta_update.get('ejemplares_disponibles', 0),
+                'timestamp': datetime.now().isoformat()
+            }
         else:
             print(f"[Actor-{self.tipo}-Sede{self.sede}] ⚠ No se pudo registrar en historial")
             self.operaciones_fallidas += 1
+            return {
+                'estado': 'ERROR',
+                'mensaje': 'Error al registrar en historial',
+                'codigo_libro': codigo_libro,
+                'timestamp': datetime.now().isoformat()
+            }
     
     def procesar_renovacion(self, mensaje):
         """
-        Procesa una renovación de libro solicitando al GA
+        Procesa una renovación de libro solicitando al GA (SÍNCRONO)
+        
+        Returns:
+            dict: Respuesta con estado de la renovación
         """
         codigo_libro = mensaje['codigo_libro']
         usuario_id = mensaje['usuario_id']
         nueva_fecha = mensaje['nueva_fecha_entrega']
         
-        print(f"\n[Actor-{self.tipo}-Sede{self.sede}] Procesando renovación:")
+        print(f"\n[Actor-{self.tipo}-Sede{self.sede}] Procesando renovación (SÍNCRONO):")
         print(f"  → Libro: {codigo_libro}")
         print(f"  → Usuario: {usuario_id}")
         print(f"  → Nueva fecha: {nueva_fecha}")
@@ -154,7 +166,12 @@ class Actor:
         if respuesta_update['estado'] != 'OK':
             print(f"[Actor-{self.tipo}-Sede{self.sede}] ✗ Error en UPDATE: {respuesta_update['mensaje']}")
             self.operaciones_fallidas += 1
-            return
+            return {
+                'estado': 'ERROR',
+                'mensaje': respuesta_update['mensaje'],
+                'codigo_libro': codigo_libro,
+                'timestamp': datetime.now().isoformat()
+            }
         
         print(f"[Actor-{self.tipo}-Sede{self.sede}] ✓ Renovación registrada en BD")
         
@@ -173,9 +190,23 @@ class Actor:
             print(f"[Actor-{self.tipo}-Sede{self.sede}] ✓ Operación registrada en historial")
             print(f"[Actor-{self.tipo}-Sede{self.sede}] → Replicación asíncrona a BD secundaria iniciada")
             self.operaciones_exitosas += 1
+            
+            return {
+                'estado': 'OK',
+                'mensaje': 'Renovación procesada exitosamente',
+                'codigo_libro': codigo_libro,
+                'nueva_fecha_entrega': nueva_fecha,
+                'timestamp': datetime.now().isoformat()
+            }
         else:
             print(f"[Actor-{self.tipo}-Sede{self.sede}] ⚠ No se pudo registrar en historial")
             self.operaciones_fallidas += 1
+            return {
+                'estado': 'ERROR',
+                'mensaje': 'Error al registrar en historial',
+                'codigo_libro': codigo_libro,
+                'timestamp': datetime.now().isoformat()
+            }
     
     def procesar_prestamo(self, mensaje):
         """
@@ -269,56 +300,9 @@ class Actor:
     
     def ejecutar(self):
         """
-        Ejecuta el loop principal del Actor
-        Comportamiento diferente según el tipo (SUB o REP)
+        Loop principal del Actor (todos son síncronos ahora)
         """
-        if self.tipo == 'PRESTAMO':
-            self.ejecutar_sincrono()
-        else:
-            self.ejecutar_asincrono()
-    
-    def ejecutar_asincrono(self):
-        """
-        Loop para actores asíncronos (DEVOLUCIÓN y RENOVACIÓN)
-        """
-        print(f"\n[Actor-{self.tipo}-Sede{self.sede}] ¡Esperando mensajes del tópico {self.tipo}!\n")
-        
-        try:
-            while True:
-                # Esperar mensaje del tópico
-                mensaje_completo = self.socket.recv_string()
-                
-                # Separar tópico y contenido
-                partes = mensaje_completo.split(' ', 1)
-                if len(partes) != 2:
-                    continue
-                
-                topico, contenido = partes
-                mensaje = json.loads(contenido)
-                
-                self.contador_operaciones += 1
-                
-                print(f"\n{'='*70}")
-                print(f"[Actor-{self.tipo}-Sede{self.sede}] Mensaje #{self.contador_operaciones} recibido")
-                
-                # Procesar según tipo de tópico
-                if topico == 'DEVOLUCION':
-                    self.procesar_devolucion(mensaje)
-                elif topico == 'RENOVACION':
-                    self.procesar_renovacion(mensaje)
-                
-                print(f"{'='*70}")
-                
-        except KeyboardInterrupt:
-            print(f"\n[Actor-{self.tipo}-Sede{self.sede}] Interrumpido por el usuario")
-        finally:
-            self.cerrar()
-    
-    def ejecutar_sincrono(self):
-        """
-        Loop para actor síncrono (PRÉSTAMO)
-        """
-        print(f"\n[Actor-{self.tipo}-Sede{self.sede}] ¡Esperando solicitudes de préstamo (REQ/REP)!\n")
+        print(f"\n[Actor-{self.tipo}-Sede{self.sede}] ¡Esperando solicitudes (REQ/REP)!\n")
         
         try:
             while True:
@@ -342,9 +326,22 @@ class Actor:
                     self.socket.send_string(json.dumps(respuesta))
                     continue
                 
-                # Procesar préstamo
+                # Procesar según tipo de actor
                 tiempo_inicio = time.time()
-                respuesta = self.procesar_prestamo(mensaje)
+                
+                if self.tipo == 'DEVOLUCION':
+                    respuesta = self.procesar_devolucion(mensaje)
+                elif self.tipo == 'RENOVACION':
+                    respuesta = self.procesar_renovacion(mensaje)
+                elif self.tipo == 'PRESTAMO':
+                    respuesta = self.procesar_prestamo(mensaje)
+                else:
+                    respuesta = {
+                        'estado': 'ERROR',
+                        'mensaje': f'Tipo de actor desconocido: {self.tipo}',
+                        'timestamp': datetime.now().isoformat()
+                    }
+                
                 tiempo_proceso = (time.time() - tiempo_inicio) * 1000
                 
                 # Enviar respuesta al GC
@@ -376,27 +373,25 @@ class Actor:
 
 
 def main():
-    if len(sys.argv) < 3:
-        print("Uso: python actor.py <tipo> <sede> [gc_host] [gc_port] [ga_host] [ga_port] [puerto_rep]")
+    if len(sys.argv) < 4:
+        print("Uso: python actor.py <tipo> <sede> <puerto_rep> [ga_host] [ga_port]")
         print("\nTipo: DEVOLUCION, RENOVACION o PRESTAMO")
         print("\nEjemplos:")
-        print("  # Actor Devolución (asíncrono - SUB)")
-        print("  python actor.py DEVOLUCION 1 localhost 5556 localhost 5560")
-        print("\n  # Actor Renovación (asíncrono - SUB)")
-        print("  python actor.py RENOVACION 1 localhost 5556 localhost 5560")
+        print("  # Actor Devolución (síncrono - REP)")
+        print("  python actor.py DEVOLUCION 1 5556 localhost 5560")
+        print("\n  # Actor Renovación (síncrono - REP)")
+        print("  python actor.py RENOVACION 1 5557 localhost 5560")
         print("\n  # Actor Préstamo (síncrono - REP)")
-        print("  python actor.py PRESTAMO 1 localhost 5556 localhost 5560 5559")
+        print("  python actor.py PRESTAMO 1 5559 localhost 5560")
         sys.exit(1)
     
     tipo = sys.argv[1]
     sede = int(sys.argv[2])
-    gc_host = sys.argv[3] if len(sys.argv) > 3 else "localhost"
-    gc_port = int(sys.argv[4]) if len(sys.argv) > 4 else 5556
-    ga_host = sys.argv[5] if len(sys.argv) > 5 else "localhost"
-    ga_port = int(sys.argv[6]) if len(sys.argv) > 6 else (5560 if sede == 1 else 5561)
-    puerto_rep = int(sys.argv[7]) if len(sys.argv) > 7 else None
+    puerto_rep = int(sys.argv[3])
+    ga_host = sys.argv[4] if len(sys.argv) > 4 else "localhost"
+    ga_port = int(sys.argv[5]) if len(sys.argv) > 5 else (5560 if sede == 1 else 5561)
     
-    actor = Actor(tipo, sede, gc_host, gc_port, ga_host, ga_port, puerto_rep)
+    actor = Actor(tipo, sede, puerto_rep, ga_host, ga_port)
     actor.ejecutar()
 
 

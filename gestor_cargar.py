@@ -1,7 +1,8 @@
 """
 Gestor de Carga (GC)
-Recibe peticiones de PS y las distribuye según el tipo de operación:
-- DEVOLUCION y RENOVACION: Asíncronas (PUB/SUB)
+Recibe peticiones de PS y las distribuye a los Actores usando REQ/REP:
+- DEVOLUCION: Síncrona (REQ/REP con Actor de Devolución)
+- RENOVACION: Síncrona (REQ/REP con Actor de Renovación)
 - PRESTAMO: Síncrona (REQ/REP con Actor de Préstamo)
 """
 import zmq
@@ -10,15 +11,17 @@ from datetime import datetime, timedelta
 import sys
 
 class GestorCarga:
-    def __init__(self, sede, ps_port=5555, pub_port=5556, actor_prestamo_port=5559):
+    def __init__(self, sede, ps_port=5555, 
+                 actor_dev_port=5556, actor_ren_port=5557, actor_prest_port=5559):
         """
         Inicializa el Gestor de Carga
         
         Args:
             sede: Identificador de la sede (1 o 2)
-            ps_port: Puerto para recibir peticiones de PS
-            pub_port: Puerto para publicar tópicos a Actores
-            actor_prestamo_port: Puerto del Actor de Préstamo
+            ps_port: Puerto para recibir peticiones de PS (REP)
+            actor_dev_port: Puerto del Actor de Devolución (REQ)
+            actor_ren_port: Puerto del Actor de Renovación (REQ)
+            actor_prest_port: Puerto del Actor de Préstamo (REQ)
         """
         self.sede = sede
         self.context = zmq.Context()
@@ -27,88 +30,114 @@ class GestorCarga:
         self.socket_ps = self.context.socket(zmq.REP)
         self.socket_ps.bind(f"tcp://*:{ps_port}")
         
-        # Socket PUB para publicar tópicos a Actores asíncronos
-        self.socket_pub = self.context.socket(zmq.PUB)
-        self.socket_pub.bind(f"tcp://*:{pub_port}")
+        # Socket REQ para Actor de Devolución (síncrono)
+        self.socket_devolucion = self.context.socket(zmq.REQ)
+        self.socket_devolucion.connect(f"tcp://localhost:{actor_dev_port}")
         
-        # Socket REQ para comunicarse con Actor de Préstamo (síncrono)
+        # Socket REQ para Actor de Renovación (síncrono)
+        self.socket_renovacion = self.context.socket(zmq.REQ)
+        self.socket_renovacion.connect(f"tcp://localhost:{actor_ren_port}")
+        
+        # Socket REQ para Actor de Préstamo (síncrono)
         self.socket_prestamo = self.context.socket(zmq.REQ)
-        self.socket_prestamo.connect(f"tcp://localhost:{actor_prestamo_port}")
+        self.socket_prestamo.connect(f"tcp://localhost:{actor_prest_port}")
         
-        print(f"[GC-Sede{sede}] Iniciado:")
+        print(f"[GC-Sede{sede}] Iniciado (MODO SÍNCRONO):")
         print(f"  → Puerto PS (REP): {ps_port}")
-        print(f"  → Puerto PUB: {pub_port}")
-        print(f"  → Actor Préstamo (REQ): localhost:{actor_prestamo_port}")
+        print(f"  → Actor Devolución (REQ): localhost:{actor_dev_port}")
+        print(f"  → Actor Renovación (REQ): localhost:{actor_ren_port}")
+        print(f"  → Actor Préstamo (REQ): localhost:{actor_prest_port}")
         print(f"[GC-Sede{sede}] Esperando peticiones...")
         
         self.contador_peticiones = 0
     
     def procesar_devolucion(self, peticion):
         """
-        Procesa una devolución de libro (asíncrona)
-        Responde inmediatamente y publica el tópico DEVOLUCION
+        Procesa una devolución de libro (síncrona)
+        Envía solicitud al Actor y espera respuesta
         """
         print(f"[GC-Sede{self.sede}] Procesando DEVOLUCIÓN - Libro: {peticion['codigo_libro']}")
+        print(f"[GC-Sede{self.sede}] → Esperando respuesta del Actor de Devolución...")
         
-        # Responder inmediatamente al PS (asíncrono)
-        respuesta = {
-            'estado': 'OK',
-            'mensaje': f'La biblioteca está recibiendo el libro {peticion["codigo_libro"]}',
-            'operacion': 'DEVOLUCION',
-            'timestamp': datetime.now().isoformat()
-        }
-        
-        # Publicar tópico para los Actores
-        topico = "DEVOLUCION"
+        # Enviar solicitud al Actor de Devolución (bloqueante)
         mensaje_actor = {
-            'topico': topico,
             'codigo_libro': peticion['codigo_libro'],
             'usuario_id': peticion['usuario_id'],
-            'sede': self.sede,
             'timestamp': peticion['timestamp']
         }
         
-        mensaje_pub = f"{topico} {json.dumps(mensaje_actor)}"
-        self.socket_pub.send_string(mensaje_pub)
-        print(f"[GC-Sede{self.sede}] → Tópico publicado: {topico}")
+        self.socket_devolucion.send_string(json.dumps(mensaje_actor))
+        
+        # Esperar respuesta del Actor (operación síncrona)
+        respuesta_str = self.socket_devolucion.recv_string()
+        respuesta_actor = json.loads(respuesta_str)
+        
+        # Preparar respuesta para PS
+        if respuesta_actor['estado'] == 'OK':
+            respuesta = {
+                'estado': 'OK',
+                'mensaje': f'Devolución procesada. {respuesta_actor.get("mensaje", "")}',
+                'operacion': 'DEVOLUCION',
+                'libro': respuesta_actor.get('libro', ''),
+                'ejemplares_disponibles': respuesta_actor.get('ejemplares_disponibles', 0),
+                'timestamp': datetime.now().isoformat()
+            }
+            print(f"[GC-Sede{self.sede}] ✓ Devolución procesada exitosamente")
+        else:
+            respuesta = {
+                'estado': respuesta_actor['estado'],
+                'mensaje': respuesta_actor['mensaje'],
+                'operacion': 'DEVOLUCION',
+                'timestamp': datetime.now().isoformat()
+            }
+            print(f"[GC-Sede{self.sede}] ✗ Error en devolución: {respuesta_actor['mensaje']}")
         
         return respuesta
     
     def procesar_renovacion(self, peticion):
         """
-        Procesa una renovación de libro (asíncrona)
-        Responde inmediatamente con nueva fecha y publica el tópico RENOVACION
+        Procesa una renovación de libro (síncrona)
+        Envía solicitud al Actor y espera respuesta
         """
         print(f"[GC-Sede{self.sede}] Procesando RENOVACIÓN - Libro: {peticion['codigo_libro']}")
+        print(f"[GC-Sede{self.sede}] → Esperando respuesta del Actor de Renovación...")
         
         # Calcular nueva fecha de entrega (1 semana adicional)
         fecha_actual = datetime.now()
         nueva_fecha = fecha_actual + timedelta(weeks=1)
         
-        # Responder inmediatamente al PS (asíncrono)
-        respuesta = {
-            'estado': 'OK',
-            'mensaje': f'Renovación exitosa. Nueva fecha de entrega: {nueva_fecha.strftime("%Y-%m-%d")}',
-            'operacion': 'RENOVACION',
-            'nueva_fecha_entrega': nueva_fecha.isoformat(),
-            'timestamp': datetime.now().isoformat()
-        }
-        
-        # Publicar tópico para los Actores
-        topico = "RENOVACION"
+        # Enviar solicitud al Actor de Renovación (bloqueante)
         mensaje_actor = {
-            'topico': topico,
             'codigo_libro': peticion['codigo_libro'],
             'usuario_id': peticion['usuario_id'],
-            'sede': self.sede,
-            'fecha_actual': fecha_actual.isoformat(),
             'nueva_fecha_entrega': nueva_fecha.isoformat(),
             'timestamp': peticion['timestamp']
         }
         
-        mensaje_pub = f"{topico} {json.dumps(mensaje_actor)}"
-        self.socket_pub.send_string(mensaje_pub)
-        print(f"[GC-Sede{self.sede}] → Tópico publicado: {topico}")
+        self.socket_renovacion.send_string(json.dumps(mensaje_actor))
+        
+        # Esperar respuesta del Actor (operación síncrona)
+        respuesta_str = self.socket_renovacion.recv_string()
+        respuesta_actor = json.loads(respuesta_str)
+        
+        # Preparar respuesta para PS
+        if respuesta_actor['estado'] == 'OK':
+            respuesta = {
+                'estado': 'OK',
+                'mensaje': f'Renovación exitosa. Nueva fecha de entrega: {nueva_fecha.strftime("%Y-%m-%d")}',
+                'operacion': 'RENOVACION',
+                'nueva_fecha_entrega': nueva_fecha.isoformat(),
+                'timestamp': datetime.now().isoformat()
+            }
+            print(f"[GC-Sede{self.sede}] ✓ Renovación procesada exitosamente")
+        else:
+            respuesta = {
+                'estado': respuesta_actor['estado'],
+                'mensaje': respuesta_actor['mensaje'],
+                'operacion': 'RENOVACION',
+                'timestamp': datetime.now().isoformat()
+            }
+            print(f"[GC-Sede{self.sede}] ✗ Error en renovación: {respuesta_actor['mensaje']}")
         
         return respuesta
     
@@ -221,7 +250,8 @@ class GestorCarga:
     def cerrar(self):
         """Cierra los sockets y el contexto"""
         self.socket_ps.close()
-        self.socket_pub.close()
+        self.socket_devolucion.close()
+        self.socket_renovacion.close()
         self.socket_prestamo.close()
         self.context.term()
         
@@ -234,18 +264,21 @@ class GestorCarga:
 
 def main():
     if len(sys.argv) < 2:
-        print("Uso: python gestor_carga.py <sede> [ps_port] [pub_port] [actor_prestamo_port]")
+        print("Uso: python gestor_carga.py <sede> [ps_port] [actor_dev_port] [actor_ren_port] [actor_prest_port]")
         print("\nEjemplos:")
-        print("  python gestor_carga.py 1 5555 5556 5559")
-        print("  python gestor_carga.py 2 5557 5558 5560")
+        print("  # Sede 1 - puertos: PS=5555, Dev=5556, Ren=5557, Prest=5559")
+        print("  python gestor_carga.py 1 5555 5556 5557 5559")
+        print("\n  # Sede 2 - puertos: PS=5565, Dev=5566, Ren=5567, Prest=5569")
+        print("  python gestor_carga.py 2 5565 5566 5567 5569")
         sys.exit(1)
     
     sede = int(sys.argv[1])
-    ps_port = int(sys.argv[2]) if len(sys.argv) > 2 else (5555 if sede == 1 else 5557)
-    pub_port = int(sys.argv[3]) if len(sys.argv) > 3 else (5556 if sede == 1 else 5558)
-    actor_prestamo_port = int(sys.argv[4]) if len(sys.argv) > 4 else (5559 if sede == 1 else 5560)
+    ps_port = int(sys.argv[2]) if len(sys.argv) > 2 else (5555 if sede == 1 else 5565)
+    actor_dev_port = int(sys.argv[3]) if len(sys.argv) > 3 else (5556 if sede == 1 else 5566)
+    actor_ren_port = int(sys.argv[4]) if len(sys.argv) > 4 else (5557 if sede == 1 else 5567)
+    actor_prest_port = int(sys.argv[5]) if len(sys.argv) > 5 else (5559 if sede == 1 else 5569)
     
-    gestor = GestorCarga(sede, ps_port, pub_port, actor_prestamo_port)
+    gestor = GestorCarga(sede, ps_port, actor_dev_port, actor_ren_port, actor_prest_port)
     gestor.ejecutar()
 
 
