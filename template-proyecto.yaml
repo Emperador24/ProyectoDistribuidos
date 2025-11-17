@@ -93,15 +93,15 @@ Resources:
           CidrIp: 10.0.0.0/16
           Description: "ICMP (ping) dentro de la VPC"
         - IpProtocol: tcp
-          FromPort: !Ref 5555
-          ToPort: !Ref 5556
+          FromPort: 5555
+          ToPort: 5560
           CidrIp: 10.0.0.0/16
       Tags:
         - Key: Name
           Value: "Biblioteca-SG"
 
   #--- Instancias EC2 ---#
-  SolicitantesPSInstance:
+  Sede1SolicitantesPSInstance:
     Type: 'AWS::EC2::Instance'
     Properties:
       InstanceType: t2.micro
@@ -122,9 +122,32 @@ Resources:
           pip3.12 install mysql-connector-python pyzmq
       Tags:
         - Key: Name
-          Value: "Solicitantes PS"
+          Value: "Sede 1 - Solicitantes PS"
 
-  GCActoresBDInstance:
+  Sede2SolicitantesPSInstance:
+    Type: 'AWS::EC2::Instance'
+    Properties:
+      InstanceType: t2.micro
+      ImageId: !Ref LatestAmiId
+      SecurityGroupIds:
+        - !Ref ClientSecurityGroup
+      SubnetId: !Ref PublicSubnet
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash -xe
+          # Update packages
+          dnf update -y
+          
+          # Install Python 3.12, Pip for 3.12, and Git
+          dnf install -y python3.12 python3.12-pip git
+          
+          # Install required Python libraries
+          pip3.12 install mysql-connector-python pyzmq
+      Tags:
+        - Key: Name
+          Value: "Sede 2 - Solicitantes PS"
+
+  Sede1GCActoresInstance:
     Type: 'AWS::EC2::Instance'
     Properties:
       InstanceType: t2.micro
@@ -151,17 +174,130 @@ Resources:
           usermod -a -G docker ec2-user
       Tags:
         - Key: Name
-          Value: "GC, Actores y BD"
+          Value: "Sede 1 - GC y Actores"
+
+  Sede2GCActoresInstance:
+    Type: 'AWS::EC2::Instance'
+    Properties:
+      InstanceType: t2.micro
+      ImageId: !Ref LatestAmiId
+      SecurityGroupIds:
+        - !Ref ClientSecurityGroup
+      SubnetId: !Ref PublicSubnet
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash -xe
+          # Update packages
+          dnf update -y
+          
+          # Install Python 3.12, Pip for 3.12, and Git
+          dnf install -y python3.12 python3.12-pip git
+          
+          # Install required Python libraries
+          pip3.12 install mysql-connector-python pyzmq
+          
+      Tags:
+        - Key: Name
+          Value: "Sede 2 - GC y Actores"
+
+  GAyBDInstance:
+    Type: 'AWS::EC2::Instance'
+    Properties:
+      InstanceType: t2.micro
+      ImageId: !Ref LatestAmiId
+      SecurityGroupIds:
+        - !Ref ClientSecurityGroup
+      SubnetId: !Ref PublicSubnet
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash -xe
+          # Update packages
+          dnf update -y
+          
+          # Install Python 3.12, Pip for 3.12, and Git
+          dnf install -y python3.12 python3.12-pip git
+          
+          # Install required Python libraries
+          pip3.12 install mysql-connector-python pyzmq
+          
+          # Install and configure Docker
+          dnf install -y docker
+          systemctl start docker
+          systemctl enable docker
+          usermod -a -G docker ec2-user
+
+          # Install Docker Compose (Standalone binary)
+          curl -L https://github.com/docker/compose/releases/latest/download/docker-compose-$(uname -s)-$(uname -m) -o /usr/local/bin/docker-compose
+          chmod +x /usr/local/bin/docker-compose
+          
+          # Verify version in logs
+          docker-compose --version
+      Tags:
+        - Key: Name
+          Value: "GA y BD"
+          
+  GAyReplicaInstance:
+    Type: 'AWS::EC2::Instance'
+    Properties:
+      InstanceType: t2.micro
+      ImageId: !Ref LatestAmiId
+      SecurityGroupIds:
+        - !Ref ClientSecurityGroup
+      SubnetId: !Ref PublicSubnet
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash -xe
+          # Update packages
+          dnf update -y
+          
+          # Install Python 3.12, Pip for 3.12, and Git
+          dnf install -y python3.12 python3.12-pip git
+          
+          # Install required Python libraries
+          pip3.12 install mysql-connector-python pyzmq
+          
+          # Install and configure Docker
+          dnf install -y docker
+          systemctl start docker
+          systemctl enable docker
+          usermod -a -G docker ec2-user
+
+          # Install Docker Compose (Standalone binary)
+          curl -L https://github.com/docker/compose/releases/latest/download/docker-compose-$(uname -s)-$(uname -m) -o /usr/local/bin/docker-compose
+          chmod +x /usr/local/bin/docker-compose
+          
+          # Verify version in logs
+          docker-compose --version
+      Tags:
+        - Key: Name
+          Value: "GA y replica"
 
 Outputs:
   VPCId:
     Description: ID de la VPC creada
     Value: !Ref VPC
 
-  SolicitantesPSPublicIP:
+  Sede1SolicitantesPSInstancePublicIP:
     Description: Dirección IP publica de la instancia Solicitantes PS
-    Value: !GetAtt SolicitantesPSInstance.PublicIp
+    Value: !GetAtt Sede1SolicitantesPSInstance.PublicIp
 
-  GCActoresBDPublicIP:
+  Sede2SolicitantesPSInstancePublicIP:
+    Description: Dirección IP publica de la instancia Solicitantes PS
+    Value: !GetAtt Sede2SolicitantesPSInstance.PublicIp
+
+  Sede1GCActoresInstancePublicIP:
     Description: Dirección IP publica de la instancia GC, Actores y BD
-    Value: !GetAtt GCActoresBDInstance.PublicIp
+    Value: !GetAtt Sede1GCActoresInstance.PublicIp
+  
+  Sede2GCActoresInstancePublicIP:
+    Description: Dirección IP publica de la instancia GC, Actores y BD
+    Value: !GetAtt Sede2GCActoresInstance.PublicIp
+
+  GAyBDInstancePublicIP:
+    Description: Dirección IP publica de la instancia GC, Actores y BD
+    Value: !GetAtt GAyBDInstance.PublicIp
+
+  
+  GAyReplicaInstancePublicIP:
+    Description: Dirección IP publica de la instancia GC, Actores y BD
+    Value: !GetAtt GAyReplicaInstance.PublicIp
