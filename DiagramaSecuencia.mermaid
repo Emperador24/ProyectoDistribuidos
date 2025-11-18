@@ -14,60 +14,66 @@ sequenceDiagram
     
     rect rgb(230, 240, 255)
         Note over PS: Cargar archivo<br/>peticiones.txt
-        Note over GC: Bind REP:5555<br/>Bind PUB:5556
-        Note over AD: Subscribe<br/>"DEVOLUCION"
-        Note over AR: Subscribe<br/>"RENOVACION"
+        Note over GC: Bind REP:5555<br/>Connect REQ a Actores
+        Note over AD: Bind REP:5556
+        Note over AR: Bind REP:5557
         Note over AP: Bind REP:5559
         Note over GA: Iniciar pool<br/>conexiones BD
         Note over BD,BR: Ambas con<br/>1000 libros
     end
     
-    Note over PS,BR: 📤 OPERACIÓN 1: DEVOLUCIÓN (ASÍNCRONA)
+    Note over PS,BR: 📤 OPERACIÓN 1: DEVOLUCIÓN (SÍNCRONA)
     
     rect rgb(255, 250, 245)
         PS->>GC: REQ: DEVOLUCION|LIB001|USR1001
-        Note right of GC: Respuesta<br/>inmediata
-        GC-->>PS: REP: OK "Biblioteca recibiendo libro"
-        Note left of PS: Cliente libre<br/>~3ms
+        Note right of GC: Espera respuesta<br/>del Actor
         
-        GC->>AD: PUB: DEVOLUCION {datos}
-        Note right of AD: Procesamiento<br/>asíncrono
+        GC->>AD: REQ: Procesar DEVOLUCION
+        Note right of AD: Procesamiento<br/>síncrono
         
-        AD->>GA: Solicitar UPDATE
+        AD->>GA: REQ: UPDATE_DEVOLUCION
         GA->>BD: UPDATE libros SET ejemplares+=1
         BD-->>GA: OK
-        GA-->>AD: Confirmación
+        GA-->>AD: REP: Confirmación
         
-        AD->>GA: INSERT historial
+        AD->>GA: REQ: INSERT_HISTORIAL
         GA->>BD: INSERT INTO historial_operaciones
         BD-->>GA: OK
+        GA-->>AD: REP: OK
         
         Note over GA,BR: Replicación async
         GA->>BR: Replicar cambios
         BR-->>GA: ACK (async)
+        
+        AD-->>GC: REP: OK "Devolución exitosa"
+        GC-->>PS: REP: OK "Biblioteca recibió libro"
+        Note left of PS: BD actualizada<br/>~40-80ms
     end
     
-    Note over PS,BR: 🔄 OPERACIÓN 2: RENOVACIÓN (ASÍNCRONA)
+    Note over PS,BR: 🔄 OPERACIÓN 2: RENOVACIÓN (SÍNCRONA)
     
     rect rgb(245, 255, 245)
         PS->>GC: REQ: RENOVACION|LIB025|USR2002
-        Note right of GC: Calcular<br/>nueva_fecha<br/>(+7 días)
-        GC-->>PS: REP: OK "Nueva fecha: 2025-10-13"
-        Note left of PS: Fecha recibida<br/>~3ms
+        Note right of GC: Calcular nueva_fecha<br/>Espera respuesta Actor
         
-        GC->>AR: PUB: RENOVACION {libro, nueva_fecha}
+        GC->>AR: REQ: Procesar RENOVACION
         
-        AR->>GA: Solicitar UPDATE
+        AR->>GA: REQ: UPDATE_RENOVACION
         GA->>BD: UPDATE prestamos SET fecha_entrega, renovaciones+=1
         BD-->>GA: OK (si renovaciones<2)
-        GA-->>AR: Confirmación
+        GA-->>AR: REP: Confirmación
         
-        AR->>GA: INSERT historial
+        AR->>GA: REQ: INSERT_HISTORIAL
         GA->>BD: INSERT INTO historial_operaciones
         BD-->>GA: OK
+        GA-->>AR: REP: OK
         
         GA->>BR: Replicar cambios
         BR-->>GA: ACK (async)
+        
+        AR-->>GC: REP: OK "Renovación exitosa"
+        GC-->>PS: REP: OK "Nueva fecha: 2025-10-13"
+        Note left of PS: BD actualizada<br/>~40-80ms
     end
     
     Note over PS,BR: 🔒 OPERACIÓN 3: PRÉSTAMO (SÍNCRONA)
@@ -78,31 +84,27 @@ sequenceDiagram
         
         GC->>AP: REQ: Verificar y otorgar LIB300
         
-        AP->>GA: SELECT ejemplares_disponibles
+        AP->>GA: REQ: SELECT_DISPONIBILIDAD
         GA->>BD: SELECT FROM libros WHERE codigo='LIB300'
         BD-->>GA: ejemplares=2
-        GA-->>AP: Disponibles: 2
+        GA-->>AP: REP: Disponibles: 2
         
         alt Libro disponible (ejemplares > 0)
-            AP->>GA: BEGIN TRANSACTION
+            AP->>GA: REQ: TRANSACCION_PRESTAMO
             GA->>BD: START TRANSACTION
             
-            AP->>GA: UPDATE libros SET ejemplares-=1
-            GA->>BD: UPDATE libros
+            GA->>BD: UPDATE libros SET ejemplares-=1
             BD-->>GA: OK
             
-            AP->>GA: INSERT prestamos (nuevo préstamo)
             GA->>BD: INSERT INTO prestamos
             BD-->>GA: OK
             
-            AP->>GA: INSERT historial
             GA->>BD: INSERT INTO historial_operaciones
             BD-->>GA: OK
             
-            AP->>GA: COMMIT
             GA->>BD: COMMIT TRANSACTION
             BD-->>GA: Transacción exitosa
-            GA-->>AP: Confirmación
+            GA-->>AP: REP: Confirmación
             
             Note over GA,BR: Replicar después<br/>de COMMIT
             GA->>BR: Replicar transacción completa
@@ -123,7 +125,7 @@ sequenceDiagram
     Note over PS,BR: ⚠️ ESCENARIO DE FALLA: BD PRINCIPAL
     
     rect rgb(255, 240, 240)
-        AD->>GA: Solicitar UPDATE
+        AD->>GA: REQ: Solicitar UPDATE
         GA->>BD: Intentar conexión
         Note right of BD: BD Principal<br/>NO RESPONDE
         BD--xGA: Connection timeout/refused
@@ -135,12 +137,12 @@ sequenceDiagram
         
         GA->>BR: Establecer nueva conexión
         BR-->>GA: Conexión OK (ahora es primaria)
-        GA-->>AD: Conexión lista
+        GA-->>AD: REP: Conexión lista, reintentar
         
-        AD->>GA: Reintentar UPDATE
+        AD->>GA: REQ: Reintentar UPDATE
         GA->>BR: UPDATE libros
         BR-->>GA: OK
-        GA-->>AD: Confirmación
+        GA-->>AD: REP: Confirmación
         
         Note over BD,BR: BD Réplica ahora es PRINCIPAL<br/>BD Principal INACTIVA
         
@@ -150,13 +152,13 @@ sequenceDiagram
     Note over PS,BR: 📊 RESUMEN FINAL
     
     rect rgb(245, 245, 250)
-        Note over PS: 3 operaciones enviadas:<br/>• 1 Devolución (3ms)<br/>• 1 Renovación (3ms)<br/>• 1 Préstamo (80ms)
+        Note over PS: 3 operaciones enviadas:<br/>• Devolución (~40-80ms)<br/>• Renovación (~40-80ms)<br/>• Préstamo (~80ms)<br/>TODAS SÍNCRONAS
         
-        Note over GC: Routing de mensajes:<br/>• REP inmediato (async)<br/>• PUB a tópicos<br/>• REQ/REP (sync)
+        Note over GC: Routing de mensajes:<br/>• REQ/REP con cada Actor<br/>• Espera respuesta de Actor<br/>• Luego responde a PS
         
-        Note over AD,AR: Procesamiento async:<br/>• No bloquea cliente<br/>• BD actualizada después<br/>• Multiple consumers
+        Note over AD,AR: Procesamiento síncrono:<br/>• Cliente espera<br/>• BD actualizada antes de responder<br/>• Garantía de consistencia
         
-        Note over AP: Procesamiento sync:<br/>• Cliente espera<br/>• Transacción ACID<br/>• Confirmación inmediata
+        Note over AP: Procesamiento síncrono:<br/>• Cliente espera<br/>• Transacción ACID completa<br/>• Confirmación inmediata
         
         Note over GA: Gestión de BD:<br/>• Pool conexiones<br/>• Health checks<br/>• Failover automático
         
