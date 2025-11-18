@@ -103,90 +103,32 @@ Para el correcto funcionamiento, los componentes deben iniciarse en este orden:
 3. **Gestor de Carga (GC)**
 4. **Proceso Solicitante (PS)**
 
-### Configuración para 2 computadoras (mínimo)
+### Configuración completa para 3 computadoras (por sede)
 
-#### **Computadora 1: Infraestructura Backend (GA + GC + Actores)**
+#### **Computadora 1: GA y BD**
 
 ```bash
-# Terminal 1: Gestor de Almacenamiento
-python3.12 gestor_almacenamiento.py 1 5560 localhost 3306
+# GA
+python3.12 gestor_almacenamiento.py 1 5560 <mysql_host> 3306
 
-# Terminal 2: Actor Devolución (puerto 5556)
-python3.12 actor.py DEVOLUCION 1 5556 localhost 5560
-
-# Terminal 3: Actor Renovación (puerto 5557)
-python3.12 actor.py RENOVACION 1 5557 localhost 5560
-
-# Terminal 4: Actor Préstamo (puerto 5559)
-python3.12 actor.py PRESTAMO 1 5559 localhost 5560
-
-# Terminal 5: Gestor de Carga
-# Puertos: PS=5555, Dev=5556, Ren=5557, Prest=5559
-python3.12 gestor_carga.py 1 5555 5556 5557 5559
 ```
 
-**Usando nohup (ejecución en segundo plano):**
+#### **Computadora 2: GC y Actores**
 
 ```bash
-# Gestor de Almacenamiento
-nohup python3.12 gestor_almacenamiento.py 1 5560 localhost 3306 > ga.log 2>&1 &
-
-# Actores (todos REP ahora)
-nohup python3.12 actor.py DEVOLUCION 1 5556 localhost 5560 > devolucion.log 2>&1 &
-nohup python3.12 actor.py RENOVACION 1 5557 localhost 5560 > renovacion.log 2>&1 &
-nohup python3.12 actor.py PRESTAMO 1 5559 localhost 5560 > prestamo.log 2>&1 &
-
-# Gestor de Carga
-nohup python3.12 gestor_carga.py 1 5555 5556 5557 5559 > gestor.log 2>&1 &
-```
-
-#### **Computadora 2: Proceso Solicitante**
-
-```bash
-# Ejecutar PS conectándose al GC de la Computadora 1
-python3.12 proceso_solicitante.py peticiones.txt <ip_computadora_1> 5555
-```
-
-### Configuración completa para 3 computadoras
-
-#### **Computadora 1: Sede 1**
-
-```bash
-# GA Sede 1
-nohup python3.12 gestor_almacenamiento.py 1 5560 <mysql_host> 3306 > ga1.log 2>&1 &
-
-# Actores Sede 1 (todos REP)
-nohup python3.12 actor.py DEVOLUCION 1 5556 localhost 5560 > dev1.log 2>&1 &
-nohup python3.12 actor.py RENOVACION 1 5557 localhost 5560 > ren1.log 2>&1 &
-nohup python3.12 actor.py PRESTAMO 1 5559 localhost 5560 > prest1.log 2>&1 &
+# Actores
+python3.12 actor.py DEVOLUCION 1 5556 <ga_host_ip> 5560
+python3.12 actor.py RENOVACION 1 5557 <ga_host_ip> 5560
+python3.12 actor.py PRESTAMO 1 5559 <ga_host_ip> 5560
 
 # GC Sede 1 (puertos: PS=5555, Dev=5556, Ren=5557, Prest=5559)
-nohup python3.12 gestor_carga.py 1 5555 5556 5557 5559 > gc1.log 2>&1 &
-```
-
-#### **Computadora 2: Sede 2**
-
-```bash
-# GA Sede 2
-nohup python3.12 gestor_almacenamiento.py 2 5561 <mysql_host> 3306 > ga2.log 2>&1 &
-
-# Actores Sede 2 (todos REP)
-nohup python3.12 actor.py DEVOLUCION 2 5566 localhost 5561 > dev2.log 2>&1 &
-nohup python3.12 actor.py RENOVACION 2 5567 localhost 5561 > ren2.log 2>&1 &
-nohup python3.12 actor.py PRESTAMO 2 5569 localhost 5561 > prest2.log 2>&1 &
-
-# GC Sede 2 (puertos: PS=5565, Dev=5566, Ren=5567, Prest=5569)
-nohup python3.12 gestor_carga.py 2 5565 5566 5567 5569 > gc2.log 2>&1 &
+python3.12 gestor_carga.py 1 5555 5556 5557 5559
 ```
 
 #### **Computadora 3: Procesos Solicitantes**
 
 ```bash
-# PS para Sede 1
-python3.12 proceso_solicitante.py peticiones_sede1.txt <ip_comp1> 5555
-
-# PS para Sede 2 (en otra terminal)
-python3.12 proceso_solicitante.py peticiones_sede2.txt <ip_comp2> 5565
+python3.12 proceso_solicitante.py peticiones.txt <ip_comp1> 5555
 ```
 
 ## 📝 Formato del Archivo de Peticiones

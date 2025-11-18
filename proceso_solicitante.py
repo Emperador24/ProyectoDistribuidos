@@ -4,59 +4,68 @@ import time
 import sys
 import multiprocessing
 import os
+import statistics
 from datetime import datetime
 
 class ProcesoSolicitante:
-    def __init__(self, gestor_host="localhost", gestor_port=5555):
+    def __init__(self, process_id, gestor_host="localhost", gestor_port=5555):
         self.gestor_host = gestor_host
         self.gestor_port = gestor_port
+        self.process_id = process_id
         self.context = None
         self.socket = None
 
     def conectar(self):
-        """Establece la conexión ZMQ (Debe llamarse dentro del proceso específico)"""
+        """Establece la conexión ZMQ dentro del proceso"""
         self.context = zmq.Context()
         self.socket = self.context.socket(zmq.REQ)
         self.socket.connect(f"tcp://{self.gestor_host}:{self.gestor_port}")
-        self.pid = os.getpid()
-        print(f"[PS-{self.pid}] Conectado al Gestor")
 
     def enviar_peticion(self, peticion):
+        """Envía una petición, mide el tiempo de respuesta y retorna la duración."""
         try:
-            # Actualizar timestamp al momento exacto del envío
             peticion_envio = peticion.copy()
             peticion_envio['timestamp'] = datetime.now().isoformat()
-            
             mensaje = json.dumps(peticion_envio)
-            # print(f"[PS-{self.pid}] Enviando: {peticion_envio['operacion']} {peticion_envio['codigo_libro']}")
+            
+            # --- INICIO MEDICIÓN DE TIEMPO ---
+            t_inicio = time.perf_counter()
             
             self.socket.send_string(mensaje)
             respuesta_str = self.socket.recv_string()
+            
+            t_fin = time.perf_counter()
+            # --- FIN MEDICIÓN DE TIEMPO ---
+            
+            duracion = t_fin - t_inicio
             respuesta = json.loads(respuesta_str)
             
-            if respuesta['estado'] == 'OK':
-                print(f"[PS-{self.pid}] ✓ OK")
-            else:
-                print(f"[PS-{self.pid}] ✗ Error: {respuesta['mensaje']}")
+            # LOG DETALLADO
+            estado_icon = "✓" if respuesta['estado'] == 'OK' else "✗"
+            print(f"[Proc-{self.process_id}] {peticion['operacion']} | "
+                  f"Tiempo: {duracion:.4f}s | {estado_icon} {respuesta['mensaje']}")
             
-            return respuesta
+            return duracion
+            
         except Exception as e:
-            print(f"[PS-{self.pid} ERROR] {e}")
+            print(f"[Proc-{self.process_id} ERROR] {e}")
             return None
 
-    def procesar_lista(self, lista_peticiones, delay=0):
+    def procesar_lista(self, lista_peticiones, tiempos_cola):
+        """Procesa la lista de peticiones y guarda los tiempos en la cola compartida."""
         self.conectar()
-        exitosas = 0
         for peticion in lista_peticiones:
-            respuesta = self.enviar_peticion(peticion)
-            if respuesta and respuesta['estado'] == 'OK':
-                exitosas += 1
-            if delay > 0: time.sleep(delay)
+            duracion = self.enviar_peticion(peticion)
+            if duracion is not None:
+                tiempos_cola.put(duracion) # Guardar el tiempo en la cola compartida
         self.cerrar()
 
     def cerrar(self):
-        if self.socket: self.socket.close()
-        if self.context: self.context.term()
+        """Cierra la conexión ZMQ (socket y contexto)."""
+        if self.socket: 
+            self.socket.close()
+        if self.context: 
+            self.context.term()
 
 # --- Funciones Auxiliares ---
 
@@ -79,11 +88,11 @@ def leer_archivo_peticiones(archivo_path):
         print(f"Archivo no encontrado: {archivo_path}")
         sys.exit(1)
 
-def proceso_trabajador(lista_completa, host, port, delay):
-    """Cada trabajador recibe la LISTA COMPLETA"""
-    cliente = ProcesoSolicitante(host, port)
+def proceso_trabajador(process_id, lista_completa, host, port, tiempos_cola):
+    """Función wrapper para el proceso que recibe la cola para los tiempos."""
+    cliente = ProcesoSolicitante(process_id, host, port)
     try:
-        cliente.procesar_lista(lista_completa, delay)
+        cliente.procesar_lista(lista_completa, tiempos_cola)
     except KeyboardInterrupt:
         pass
 
@@ -97,35 +106,64 @@ def main():
     port = int(sys.argv[3]) if len(sys.argv) > 3 else 5555
     num_procesos = int(sys.argv[4]) if len(sys.argv) > 4 else 1
     
-    # 1. Cargar peticiones una sola vez
     todas_peticiones = leer_archivo_peticiones(archivo)
+    if not todas_peticiones: return
     
-    if not todas_peticiones:
-        return
+    manager = multiprocessing.Manager()
+    tiempos_cola = manager.Queue()
 
-    print("=" * 60)
-    print(f"[MAIN] INICIANDO TEST DE CARGA PARALELO")
-    print(f" - Peticiones en archivo: {len(todas_peticiones)}")
-    print(f" - Procesos paralelos:    {num_procesos}")
-    print(f" - Total peticiones a enviar: {len(todas_peticiones) * num_procesos}")
-    print("=" * 60)
+    print("=" * 70)
+    print(f"[MAIN] INICIANDO PRUEBA DE RENDIMIENTO")
+    print(f" - Peticiones por proceso: {len(todas_peticiones)}")
+    print(f" - Procesos simultáneos:   {num_procesos}")
+    print(f" - Total de llamadas:      {len(todas_peticiones) * num_procesos}")
+    print("=" * 70)
 
     procesos = []
-    
-    # 2. Lanzar N procesos, cada uno con la lista COMPLETA
+    start_time_global = time.perf_counter()
+
     for i in range(num_procesos):
-        # Pasamos 'todas_peticiones' completa a cada proceso
         p = multiprocessing.Process(
             target=proceso_trabajador,
-            args=(todas_peticiones, host, port, 0)
+            args=(i, todas_peticiones, host, port, tiempos_cola)
         )
         procesos.append(p)
         p.start()
         
     for p in procesos:
         p.join()
+
+    end_time_global = time.perf_counter()
+    total_duration = end_time_global - start_time_global
+    
+    tiempos_completos = []
+    while not tiempos_cola.empty():
+        tiempos_completos.append(tiempos_cola.get())
         
-    print("\n[MAIN] Fin de la ejecución.")
+    num_mediciones = len(tiempos_completos)
+
+    print("\n" + "=" * 70)
+    print("[MAIN] RESUMEN DE RENDIMIENTO")
+    
+    if num_mediciones > 0:
+        average_time = statistics.mean(tiempos_completos)
+        std_dev = statistics.stdev(tiempos_completos) if num_mediciones > 1 else 0
+
+        requests_per_second = num_mediciones / total_duration
+        requests_in_2_min = requests_per_second * 120
+
+        print(f" Total de Mediciones Válidas: {num_mediciones}")
+        print(f" Tiempo Total de Ejecución:   {total_duration:.4f} segundos")
+        print("--- Métricas de Respuesta ---")
+        print(f" ⏱️ Tiempo Promedio de Respuesta: {average_time:.4f} segundos")
+        print(f" 📊 Desviación Estándar (Latencia): {std_dev:.4f} segundos")
+        print("--- Proyección de Capacidad ---")
+        print(f" 🚀 Rendimiento estimado: {requests_per_second:.2f} peticiones/segundo")
+        print(f" 🎯 Capacidad estimada en 2 minutos: {int(requests_in_2_min):,} peticiones")
+    else:
+        print(" ⚠️ No se recibieron mediciones de tiempo válidas.")
+        
+    print("=" * 70)
 
 if __name__ == "__main__":
     main()
